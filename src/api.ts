@@ -16,31 +16,6 @@ const api = axios.create({
   },
 });
 
-export async function getCommitDetailsMock(
-  owner: string,
-  repo: string,
-  sha: string
-) {
-  return {
-    files: [
-      {
-        filename: "src/config.js",
-        patch: `
-+ const awsAccessKeyId = "AKIA1234567890ABCD12";
-+ const awsSecretAccessKey = "abcd1234abcd1234abcd1234abcd1234abcd1234";
-        `,
-      },
-    ],
-    commit: {
-      committer: {
-        name: "John Doe",
-        date: "2025-06-05T12:34:56Z",
-      },
-      message: "Add AWS credentials (for testing)",
-    },
-  };
-}
-
 export async function getCommitDetails(
   owner: string,
   repo: string,

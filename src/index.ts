@@ -1,27 +1,28 @@
 import express, { Express } from "express";
-import { scanAllBranches } from "./main";
+import path from "path";
+import dotenv from "dotenv";
+import { scannerRouter } from "./api/scanner/scanner.routes";
+import { createServer } from "http";
+
+dotenv.config();
 
 const app: Express = express();
 
+const httpServer = createServer(app);
 app.use(express.json());
-app.post("/scan", async (req: any, res: any) => {
-  const { owner, repo } = req.body;
 
-  if (!owner || !repo) {
-    return res
-      .status(400)
-      .json({ error: "Missing owner or repo in request body" });
-  }
+// Static files for production
+if (process.env.NODE_ENV === "production") {
+  app.use(express.static(path.join(__dirname, "public")));
+  app.get("/**", (_, res) => {
+    res.sendFile(path.join(__dirname, "public", "index.html"));
+  });
+}
 
-  try {
-    const findings = await scanAllBranches(owner, repo);
-    return res.json({ findings });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: "Failed to scan repository" });
-  }
-});
-const port = process.env.PORT || 8000;
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+app.use("/api/scanner", scannerRouter);
+
+const port = process.env.PORT || 8001;
+
+httpServer.listen(port, () => {
+  console.log(`✅ Server running on http://localhost:${port}`);
 });

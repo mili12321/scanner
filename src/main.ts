@@ -1,12 +1,7 @@
 import * as dotenv from "dotenv";
 import { getLastSha, saveLastSha } from "./storage";
 import { scanForAwsSecrets } from "./scanner";
-import {
-  getBranches,
-  getCommitDetails,
-  getCommitDetailsMock,
-  getCommits,
-} from "./api";
+import { getBranches, getCommitDetails, getCommits } from "./api";
 
 dotenv.config();
 
@@ -19,7 +14,7 @@ type Finding = {
   file: string;
 };
 
-async function getCommitsAndScan(
+export async function getCommitsAndScan(
   owner: string,
   repo: string,
   perPage = 5,
@@ -39,7 +34,6 @@ async function getCommitsAndScan(
       const commits = response.commits;
       const headers = response.headers;
       console.log(`Page ${page} - fetched ${commits.length} commits`);
-
       for (const commit of commits) {
         if (!foundLastSha) {
           if (commit.sha === lastScannedSha) {
@@ -56,9 +50,9 @@ async function getCommitsAndScan(
         let scannedCommitFully = false;
         for (const file of commitDetails.files) {
           if (!file.patch) continue;
-
           scannedCommitFully = true;
           const secrets = scanForAwsSecrets(file.patch);
+
           if (secrets.length > 0) {
             allFindings.push({
               sha: commit.sha,
@@ -68,20 +62,9 @@ async function getCommitsAndScan(
               secrets,
               file: file.filename,
             });
-            // console.log(
-            //   `Leak found in commit ${commit.sha} in file ${file.filename}:`,
-            //   secrets
-            // );
-            console.log(`🕵️‍♀️ Leak found!
-  🔸 Commit: ${commit.sha}
-  📁 File: ${file.filename}
-  👤 Committer: ${commit.commit.committer.name}
-  📅 Date: ${commit.commit.committer.date}
-  📝 Message: ${commit.commit.message.split("\n")[0]}
-  🧪 Secrets: ${secrets.join(", ")}
-`);
           }
         }
+
         if (scannedCommitFully) {
           saveLastSha(commit.sha);
         }
@@ -113,6 +96,7 @@ async function getCommitsAndScan(
   }
 
   console.log(`Total leaks found: ${allFindings.length}`);
+
   return allFindings;
 }
 
@@ -136,14 +120,3 @@ export async function scanAllBranches(owner: string, repo: string) {
   console.log(`🎯 Total leaks across all branches: ${allFindings.length}`);
   return allFindings;
 }
-
-// (async () => {
-//   const owner = "facebook";
-//   const repo = "react";
-
-//   //   const findings = await getCommitsAndScan(owner, repo, 5, 3);
-//   const findings = await scanAllBranches(owner, repo);
-
-//   console.log(`Scan complete. Found ${findings.length} leaks.`);
-//   // TODO save findings to a file or DB here
-// })();
