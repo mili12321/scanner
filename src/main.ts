@@ -1,5 +1,6 @@
 import * as dotenv from "dotenv";
-import { getLastSha, saveLastSha } from "./storage";
+// import { getLastSha, saveLastSha } from "./storage";
+import { getProgress, saveProgress } from "./storage";
 import { scanForAwsSecrets } from "./scanner";
 import { getBranches, getCommitDetails, getCommits } from "./api";
 
@@ -21,9 +22,11 @@ export async function getCommitsAndScan(
   maxPages = 10,
   branch = "main"
 ) {
-  let page = 1;
+  const repoKey = `${owner}/${repo}`;
+  const progress = getProgress(repoKey);
+  const lastScannedSha = progress?.sha || "";
+  let page = progress?.page || 1;
   let allFindings: Finding[] = [];
-  const lastScannedSha = getLastSha();
   let foundLastSha = !lastScannedSha;
 
   while (page <= maxPages) {
@@ -34,59 +37,61 @@ export async function getCommitsAndScan(
       const commits = response.commits;
       const headers = response.headers;
       console.log(`Page ${page} - fetched ${commits.length} commits`);
+
+      const tasks: (() => Promise<void>)[] = [];
+
       for (const commit of commits) {
         if (!foundLastSha) {
           if (commit.sha === lastScannedSha) {
             foundLastSha = true;
-            continue; // Skip already scanned commit
           }
-          continue; // Skip commits until we reach last scanned SHA
+          continue;
         }
 
-        const commitDetails = await getCommitDetails(owner, repo, commit.sha);
-        console.log("commitDetails", commitDetails);
-        if (!commitDetails || !commitDetails.files) continue;
+        tasks.push(async () => {
+          const commitDetails = await getCommitDetails(owner, repo, commit.sha);
+          if (!commitDetails || !commitDetails.files) return;
 
-        let scannedCommitFully = false;
-        for (const file of commitDetails.files) {
-          if (!file.patch) continue;
-          scannedCommitFully = true;
-          const secrets = scanForAwsSecrets(file.patch);
+          let scannedCommitFully = false;
 
-          if (secrets.length > 0) {
-            allFindings.push({
-              sha: commit.sha,
-              committer: commit.commit.committer.name,
-              date: commit.commit.committer.date,
-              message: commit.commit.message,
-              secrets,
-              file: file.filename,
-            });
+          for (const file of commitDetails.files) {
+            if (!file.patch) continue;
+
+            scannedCommitFully = true;
+            const secrets = scanForAwsSecrets(file.patch);
+
+            if (secrets.length > 0) {
+              allFindings.push({
+                sha: commit.sha,
+                committer: commit.commit.committer.name,
+                date: commit.commit.committer.date,
+                message: commit.commit.message,
+                secrets,
+                file: file.filename,
+              });
+            }
           }
-        }
 
-        if (scannedCommitFully) {
-          saveLastSha(commit.sha);
-        }
+          if (scannedCommitFully) {
+            saveProgress(repoKey, commit.sha, page);
+          }
+        });
       }
 
-      // Handle rate limiting
+      await runWithLimit(tasks, 5);
+
+      // Rate limit handling
       const remaining = parseInt(headers["x-ratelimit-remaining"], 10);
       const resetTime = parseInt(headers["x-ratelimit-reset"], 10) * 1000;
+      const waitTime = resetTime - Date.now();
 
-      if (remaining === 0) {
-        const waitTime = resetTime - Date.now();
-        console.log(
-          `Rate limit reached, waiting for ${waitTime / 1000} seconds...`
-        );
-        if (waitTime > 0) await new Promise((r) => setTimeout(r, waitTime));
+      if (remaining === 0 && waitTime > 0) {
+        console.log(`Rate limit reached. Waiting ${waitTime / 1000}s...`);
+        await new Promise((res) => setTimeout(res, waitTime));
       }
 
-      // Check if there's a next page
-      const linkHeader = response.headers.link;
-      if (!linkHeader || !linkHeader.includes('rel="next"')) {
-        break;
-      }
+      const linkHeader = headers.link;
+      if (!linkHeader || !linkHeader.includes('rel="next"')) break;
 
       page++;
     } catch (err: any) {
@@ -96,7 +101,6 @@ export async function getCommitsAndScan(
   }
 
   console.log(`Total leaks found: ${allFindings.length}`);
-
   return allFindings;
 }
 
@@ -109,14 +113,40 @@ export async function scanAllBranches(owner: string, repo: string) {
     return allFindings;
   }
 
-  for (const branch of branches) {
-    const branchName = branch.name;
-    console.log(`\n🔎 Scanning branch: ${branchName}`);
+  //creates array of functions where each one returns a promise for the next scan
+  const tasks = branches.map((branch: { name: string }) => async () => {
+    const findings = await getCommitsAndScan(owner, repo, 5, 10, branch.name);
+    return findings;
+  });
 
-    const findings = await getCommitsAndScan(owner, repo, 5, 10, branchName);
+  //run 3 tasks each time
+  const results = await runWithLimit(tasks, 3);
+
+  for (const findings of results) {
     allFindings.push(...findings);
   }
 
   console.log(`🎯 Total leaks across all branches: ${allFindings.length}`);
   return allFindings;
+}
+
+async function runWithLimit(tasks: any, limit: number) {
+  const results = [];
+  const executing = new Set();
+
+  for (const task of tasks) {
+    const p = task().then((r: any) => {
+      executing.delete(p);
+      return r;
+    });
+
+    results.push(p);
+    executing.add(p);
+
+    if (executing.size >= limit) {
+      await Promise.race(executing); // waiting for some task to be done
+    }
+  }
+
+  return Promise.all(results);
 }

@@ -1,4 +1,5 @@
-import axios from "axios";
+import axios, { AxiosError } from "axios";
+import axiosRetry from "axios-retry";
 import * as dotenv from "dotenv";
 dotenv.config();
 
@@ -13,6 +14,28 @@ const api = axios.create({
   headers: {
     Authorization: `token ${GITHUB_TOKEN}`,
     Accept: "application/vnd.github.v3+json",
+  },
+});
+
+axiosRetry(api, {
+  retries: 3, // Number of retries before failing
+  retryDelay: axiosRetry.exponentialDelay,
+  retryCondition: (error) => {
+    // Retry on network errors, 429 (rate limit), and 5xx server errors
+    if (axiosRetry.isNetworkError(error)) {
+      return true;
+    }
+
+    if (typeof error === "object" && error !== null) {
+      const axiosError = error as AxiosError;
+      const status = axiosError.response?.status;
+
+      if (typeof status === "number") {
+        return status === 429 || (status >= 500 && status < 600);
+      }
+    }
+
+    return false;
   },
 });
 
