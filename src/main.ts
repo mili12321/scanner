@@ -1,5 +1,4 @@
 import * as dotenv from "dotenv";
-// import { getLastSha, saveLastSha } from "./storage";
 import { getProgress, saveProgress } from "./storage";
 import { scanForAwsSecrets } from "./scanner";
 import { getBranches, getCommitDetails, getCommits } from "./api";
